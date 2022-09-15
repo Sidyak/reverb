@@ -14,6 +14,8 @@ Date: 15.09.2022
 
 #include <Bela.h>
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 
 const int iMAX_BUFFER_SIZE = (2*48000); // 2 seconds max reverb
 
