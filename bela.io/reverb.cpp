@@ -10,9 +10,13 @@ Author: Kim Radmacher
 Description: Schroeders Reverb 
 Date: 15.09.2022
 
+how to run with frame size = 32:
+./root/Bela/projects/reverb/reverb -p 32
+
 */
 
 #include <Bela.h>
+#include <libraries/ne10/NE10.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,7 +27,7 @@ int iFFCF1_BUFFER_SIZE = 1687;
 int iFFCF2_BUFFER_SIZE = 1601;
 int iFFCF3_BUFFER_SIZE = 2053;
 int iFFCF4_BUFFER_SIZE = 2251;
-const float fFFCF1_GAIN = 0.773;
+const float fFFCF1_GAIN = 0.773f;
 const float fFFCF2_GAIN = 0.802f;
 const float fFFCF3_GAIN = 0.753f;
 const float fFFCF4_GAIN = 0.733f;
@@ -54,6 +58,11 @@ int iFFCF4 = 0;
 int iAP1 = 0;
 int iAP2 = 0;
 int iAP3 = 0;
+
+float dryWet = 0;
+float modDryWet = 0;
+float roomSize = 0;
+float modRoomSize = 0;
 
 // Set the analog channels to read from
 int gAudioFramesPerAnalogFrame = 0;
@@ -106,6 +115,18 @@ bool setup(BelaContext *context, void *userData)
     if(!fAP3)
         return false;
 
+    roomSize = 0.65f;
+    dryWet = 0.24f;
+
+    iFFCF1_BUFFER_SIZE *= roomSize*4;
+    iFFCF2_BUFFER_SIZE *= roomSize*4;
+    iFFCF3_BUFFER_SIZE *= roomSize*4;
+    iFFCF4_BUFFER_SIZE *= roomSize*4;
+
+    iAP1_BUFFER_SIZE *= roomSize*4;
+    iAP2_BUFFER_SIZE *= roomSize*4;
+    iAP3_BUFFER_SIZE *= roomSize*4;
+
     // Check that we have the same number of inputs and outputs.
     if(context->audioInChannels != context->audioOutChannels ||
             context->analogInChannels != context-> analogOutChannels){
@@ -114,11 +135,6 @@ bool setup(BelaContext *context, void *userData)
     }
     return true;
 }
-
-static float dryWet = 0;
-static float modDryWet = 0;
-static float roomSize = 0;
-static float modRoomSize = 0;
 
 int modParamInt(int param, int* pParam, int range)
 {
@@ -182,6 +198,7 @@ float modParamFloat(float param, float* pParam, float range)
 #define MAX_SMP_VAL (1.f * 32767.f)
 #define MIN_SMP_VAL (-1.f * 32767.f)
 
+// TODO: use bit masking instead of if for saturation
 inline float hardClip(float x)
 {
     return (x > MAX_SMP_VAL) ? MAX_SMP_VAL : (x < MIN_SMP_VAL) ? MIN_SMP_VAL : x;
@@ -196,9 +213,9 @@ float processAP(float x, float g, float* state, int* i, int iBufsize)
     y = -g * x + state[index];
     y *= (1 - g*g); // Added due to high gain -> clipping
 
-    state[index] = g * state[(index-1+iBufsize)%iBufsize] + g * x;//x;//g * x;//
+    state[index] = hardClip(g * state[(index-1+iBufsize)%iBufsize] + g * x);//x;//g * x;//
 
-    if(++index > iBufsize)
+    if(++index > iBufsize) // TODO: use bit masking here
         index = 0;
 
     *i = index;
@@ -212,7 +229,7 @@ float processFBCF(float x, float g, float* state, int* i, int iBufsize)
     float y;
     int index = *i;
 
-    y = x + g * state[index];
+    y = hardClip(x + g * state[index]);
     state[index] = y;
 
     if(++index > iBufsize)
@@ -220,7 +237,7 @@ float processFBCF(float x, float g, float* state, int* i, int iBufsize)
 
     *i = index;
 
-    return hardClip(y);
+    return (y);
 }
 
 // Process a feed forward comb filer
@@ -229,7 +246,7 @@ float processFFCF(float x, float g, float* state, int* i, int iBufsize)
     float y;
     int index = *i;
 
-    y = g * x + g * state[index];
+    y = hardClip(g * x + g * state[index]);
     
     state[index] = x;
 
@@ -238,7 +255,7 @@ float processFFCF(float x, float g, float* state, int* i, int iBufsize)
 
     *i = index;
 
-    return hardClip(y);
+    return (y);
 }
 
 // Process mixing matrix
@@ -261,37 +278,47 @@ float processMM(float x1, float x2, float x3, float x4)
 
 void render(BelaContext *context, void *userData)
 {
-    for(unsigned int n = 0; n < context->audioFrames; n++){
 
-        uint32_t t0 = ccnt_read();
-        uint32_t t1 = t0;//ccnt_read();       
-        //rt_printf("%u\n", t1-t0);
+    uint32_t t0 = 0;
+    uint32_t t1 = 0;
+    uint32_t tMean = 0;
 
-        if(gAudioFramesPerAnalogFrame && !(n % gAudioFramesPerAnalogFrame)) {
-            if(n==0)
-            {
-                dryWet = (float)map(analogRead(context, n/gAudioFramesPerAnalogFrame, 0), 0, 1, 0, 105)/100.f;
-                dryWet = modParamFloat(dryWet, &modDryWet, 0.1f);
+#if 1
+    if(gAudioFramesPerAnalogFrame)
+    {
 
-                roomSize = (float)map(analogRead(context, n/gAudioFramesPerAnalogFrame, 1), 0, 1, 0, 105)/100.f;
-                roomSize = modParamFloat(roomSize, &modRoomSize, 0.1f);
+#if 0
+        dryWet = (float)map(analogRead(context, 0/gAudioFramesPerAnalogFrame, 0), 0, 1, 0, 105)/100.f;
+        dryWet = modParamFloat(dryWet, &modDryWet, 0.1f);
 
-                iFFCF1_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iFFCF1_BUFFER_SIZE);
-                iFFCF2_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iFFCF2_BUFFER_SIZE);
-                iFFCF3_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iFFCF3_BUFFER_SIZE);
-                iFFCF4_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iFFCF4_BUFFER_SIZE);
-                iAP1_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iAP1_BUFFER_SIZE);
-                iAP2_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iAP2_BUFFER_SIZE);
-                iAP3_BUFFER_SIZE = (int)(expf(2.9 * roomSize) * iAP3_BUFFER_SIZE);
-            }
+        roomSize = (float)map(analogRead(context, 0/gAudioFramesPerAnalogFrame, 1), 0, 1, 0, 105)/100.f;
+        roomSize = modParamFloat(roomSize, &modRoomSize, 0.1f);
+#endif
+#if 0
+        roomSize = 0.5f;
+        dryWet = 0.3f;
+
+        iFFCF1_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iFFCF1_BUFFER_SIZE);
+        iFFCF2_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iFFCF2_BUFFER_SIZE);
+        iFFCF3_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iFFCF3_BUFFER_SIZE);
+        iFFCF4_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iFFCF4_BUFFER_SIZE);
+        iAP1_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iAP1_BUFFER_SIZE);
+        iAP2_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iAP2_BUFFER_SIZE);
+        iAP3_BUFFER_SIZE = (int)((roomSize+1.f) * 2.f * iAP3_BUFFER_SIZE);
+#endif
         }
+#endif
 
+    for(unsigned int n = 0; n < context->audioFrames; n++)
+    {
         float fInL = 0;
         float fInR = 0;
 
         // Read audio inputs
         fInL = audioRead(context,n,0);
         fInR = audioRead(context,n,1);
+
+        t0 = ccnt_read();
 
         float fInput = (fInL + fInR) * 0.5f;
 
@@ -307,18 +334,19 @@ void render(BelaContext *context, void *userData)
         fOutput = hardClip(fOutput + processFFCF(ap, fFFCF3_GAIN, fFFCF3, &iFFCF3, iFFCF3_BUFFER_SIZE));
         fOutput = hardClip(fOutput + processFFCF(ap, fFFCF4_GAIN, fFFCF4, &iFFCF4, iFFCF4_BUFFER_SIZE));
 
-        fOutput *= dryWet/100.f;
-        fOutput += (1.f - dryWet/100.f) * fInput;
+        fOutput *= dryWet;
+        fOutput = hardClip(fOutput + (1.f - dryWet) * fInput);
 
         t1 = ccnt_read();
-        //rt_printf("\r\r\rdryWet = %f, roomSize = %f ####  %u cycles process", roomSize, t1-t0);    
-//rt_printf("\rfOutput = %f", fOutput);
+        tMean += (t1-t0);
+        //rt_printf("\r\r\rdryWet = %f, roomSize = %f ####  %u cycles process", dryWet, roomSize, t1-t0);    
 
         // Write the output sample
         audioWrite(context, n, 0, fOutput);
         audioWrite(context, n, 1, fOutput);
     }
 
+    rt_printf("\r\r\rdryWet = %f, roomSize = %f ####  %u cycles process", dryWet, roomSize, tMean/context->audioFrames); 
 }
 
 void cleanup(BelaContext *context, void *userData)
