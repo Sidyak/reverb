@@ -307,7 +307,6 @@ void render(BelaContext *context, void *userData)
 
         fOutput *= dryWet/100.f;
         fOutput += (1.f - dryWet/100.f) * fInput;
-#endif
 
         t1 = ccnt_read();
         //rt_printf("\r\r\rdryWet = %f, roomSize = %f ####  %u cycles process", roomSize, t1-t0);    
